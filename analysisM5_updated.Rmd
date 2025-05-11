@@ -1,0 +1,934 @@
+---
+title: "Meaningfulness5_updated"
+subtitle: "Prolific"
+author: "Cognitive Neuroscience Lab @ Yonsei Univ"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: 
+      collapse: false
+      smooth_scroll: false
+    number_sections: true
+    theme: cosmo 
+    highlight: haddock
+    code_folding: hide
+mainfont: Noto Sans CJK KR
+---
+
+```{r, eval=TRUE, echo=FALSE}
+setwd("/Users/elisabeth/Library/CloudStorage/GoogleDrive-kmin0531@yonsei.ac.kr/내 드라이브/CNL/Meeting/MeaningfulnessCue/anal")
+
+# setwd("G:/내 드라이브/CNL/Meeting/MeaningfulnessCue/anal")
+```
+
+```{css, echo=FALSE}
+pre code, pre, code {
+  white-space: pre !important;
+  overflow-x: scroll !important;
+  word-break: keep-all !important;
+  word-wrap: initial !important;
+}
+```
+
+```{r, echo=TRUE}
+set.seed(1234567) # for reproducibility
+options("scipen" = 100) # https://rfriend.tistory.com/224
+
+pacman::p_load(tidyverse, psych, knitr, rstatix, gghalves, ggpubr, BayesFactor, emmeans)
+options(dplyr.summarise.inform=FALSE) # suppress warning in regards to regrouping 
+
+options(knitr.kable.NA = '')
+klippy::klippy()
+```
+
+```{r, echo=FALSE}
+## Excluding Ss
+rm_subject <- function(df, rx){
+  for (i in rx){
+    df <- df %>% filter(SN != i) %>% droplevels()
+  }
+  cat(sprintf('%d removed & %d left', 
+              length(unique(rx)),
+              length(unique(df$SN))))
+  return(df)
+}
+
+## Plot
+# stat summary plot to 25% quartile and 75% quartile
+# https://bit.ly/3iFpV07
+single_raincloud_plot <- function(df, Y, xMin, xMax, xBy, xLab){
+  df %>% ggplot(aes(x = 1, y = Y)) +
+    geom_half_violin(aes(y = Y), side = "r", 
+                     color = "grey70", fill = "grey70") +
+    geom_half_point(aes(y = Y), side = "l", size = 2,
+                    color = "grey50", fill = "grey50", alpha = .5) +
+    geom_pointrange(stat = "summary",
+                    fun.min = function(z) {quantile(z,0.25)},
+                    fun.max = function(z) {quantile(z,0.75)},
+                    fun = median, color = "darkred", size = 1) +
+    scale_y_continuous(breaks=seq(xMin,xMax,by=xBy)) +
+    coord_flip(ylim = c(xMin, xMax), clip = "on") +
+    labs(y = xLab) +
+    theme_bw(base_size = 18) +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          axis.title.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.text.y = element_blank(),
+          aspect.ratio = .3)
+}
+```
+
+------------------------------------------------------------------------
+
+# Demographic
+
+2024년 10월 11일에 Prolific에서 피험자 40명을 모집하였다. 2024년 10월 13일까지 피험자 20명을 추가로 모집하여 총 60명의 참가자를 모집하였다.
+
+```{r, collapse=TRUE}
+demographic <- bind_rows(list(
+  read.csv('M5data/data_exp_192790-v3_questionnaire-f86v.csv', header = T),
+  read.csv('M5data/data_exp_192790-v4_questionnaire-f86v.csv', header = T)))
+dim(demographic)
+
+dg <- demographic %>% 
+  filter(Key == "value") %>% 
+  select(Participant.Private.ID,
+         Object.ID,
+         Response) %>% 
+  rename(Subject = Participant.Private.ID,
+         Query = Object.ID) %>%
+  mutate(Query = factor(Query, 
+                        levels = c('object-7', 'object-8'), 
+                        labels = c('gender', 'age'))) %>% 
+  pivot_wider(id_cols = c(Subject), 
+              names_from = Query, 
+              values_from = Response) %>%
+  mutate(Subject = factor(Subject),
+         gender = factor(gender),
+         age = as.numeric(age))
+
+dg %>%
+  group_by(gender) %>% 
+  summarise(n = n()) %>% 
+  kable(digits = 3, format = "simple", caption = 'demographic: Gender')
+
+dg %>%
+  get_summary_stats(age, type = 'common') %>% 
+  kable(digits = 3, format = "simple", caption = 'demographic: Age')
+
+```
+
+# Post-test query
+
+실험 종료 후, 피험자에게 과제에서 단서를 활용했는지 물었다.
+
+```{r, collapse=TRUE}
+postquery <- bind_rows(list(
+  read.csv('M5data/data_exp_192790-v3_questionnaire-7u53.csv', header = T),
+  read.csv('M5data/data_exp_192790-v4_questionnaire-7u53.csv', header = T)))
+dim(postquery)
+
+pq <- postquery %>% 
+  filter(Key == "quantised") %>% 
+  select(Participant.Private.ID,
+         Response) %>% 
+  rename(Subject = Participant.Private.ID,
+         Strategy = Response) %>%
+  mutate(Subject = factor(Subject),
+         Strategy = factor(Strategy))
+
+# 앞뒤 설문 자료를 합친다. 
+qs <- full_join(dg, pq, by = 'Subject')
+qs %>% print(n = Inf)
+
+qs$Strategy[is.na(qs$Strategy)] <- as.factor(3)
+
+qs %>%
+  group_by(Strategy) %>% 
+  summarise(n = n()) %>% 
+  kable(digits = 3, format = "simple")
+
+```
+
+단서를 활용하여 3개의 물체를 기억했는지(`1`) 아니면 단서를 무시하고 6개의 물체를 모두 기억했는지(`2`)에 대해 사후 설문을 실시하였다. 그 결과, 단서를 활용했다는 응답은 41 명으로 대부분의 참가들이 단서를 사용했음 알 수 있었다. <br> 기타 답변(`3`)으는 "두 물체씩만 기억했다"는 답변(4명)과 "물체가 아닌 색 패턴을 기억했다"(2명), "두 전략을 모두 사용했다"(1명) 그리고 미응답자(3명)가 있었다.
+
+# Main data
+
+## 데이터 불러오기
+
+```{r, collapse=TRUE}
+g1 <- bind_rows(list(
+  read.csv('M5data/data_exp_192790-v3_task-c84a.csv', header = T),  # v01NO1
+  read.csv('M5data/data_exp_192790-v4_task-c84a.csv', header = T),  
+  read.csv('M5data/data_exp_192790-v3_task-pnh5.csv', header = T),  # v04AR2
+  read.csv('M5data/data_exp_192790-v4_task-pnh5.csv', header = T))) 
+g2 <- bind_rows(list(
+  read.csv('M5data/data_exp_192790-v3_task-vxbk.csv', header = T),  # v02NO2
+  read.csv('M5data/data_exp_192790-v4_task-vxbk.csv', header = T),
+  read.csv('M5data/data_exp_192790-v3_task-dg8d.csv', header = T),  # v03AR1
+  read.csv('M5data/data_exp_192790-v4_task-dg8d.csv', header = T))) 
+g3 <- bind_rows(list(
+  read.csv('M5data/data_exp_192790-v3_task-4zc6.csv', header = T),  # v03AR1
+  read.csv('M5data/data_exp_192790-v4_task-4zc6.csv', header = T),
+  read.csv('M5data/data_exp_192790-v3_task-8g9j.csv', header = T),  # v02NO2
+  read.csv('M5data/data_exp_192790-v4_task-8g9j.csv', header = T))) 
+g4 <- bind_rows(list(
+  read.csv('M5data/data_exp_192790-v3_task-dwtv.csv', header = T),  # v04AR2
+  read.csv('M5data/data_exp_192790-v4_task-dwtv.csv', header = T),
+  read.csv('M5data/data_exp_192790-v3_task-locf.csv', header = T),  # v01NO1
+  read.csv('M5data/data_exp_192790-v4_task-locf.csv', header = T))) 
+
+dim(g1)
+dim(g2)
+dim(g3)
+dim(g4)
+
+mainTest <- bind_rows(list(g1, g2, g3, g4))
+dim(mainTest)
+# str(mainTest)
+
+mt <- mainTest %>% 
+  filter(Screen == "test") %>% 
+  select(Participant.Private.ID,
+         allocator.3ka9,
+         Trial.Number,
+         Spreadsheet..suffix,
+         Spreadsheet..cue,
+         Spreadsheet..tarLoc, # 목표 자극 위치
+         Spreadsheet..tarDis,
+         Response, # 실제 응답 위치
+         Correct,
+         Reaction.Time) %>% 
+  rename(Subject = Participant.Private.ID,
+         Group = allocator.3ka9,
+         Trials = Trial.Number,
+         Stimulus = Spreadsheet..suffix,
+         Cue = Spreadsheet..cue,
+         Order = Spreadsheet..tarDis, # 첫 번째 vs. 두 번째 화면 
+         Key = Spreadsheet..tarLoc,
+         RT = Reaction.Time) %>% 
+  mutate(Subject = factor(Subject),
+         Stimulus = factor(Stimulus,
+                           levels = c('.jpg', '_scram.jpg'),
+                           labels = c('Intact', 'Scrambled')),
+         Cue = factor(Cue, 
+                      levels = c(0, 1),
+                      labels = c('NoCue', 'RetroCue')),
+         Order = factor(Order, 
+                      levels = c(1, 2),
+                      labels = c('First', 'Second'))) %>% 
+  group_by(Subject) %>% 
+  mutate(SN = cur_group_id(),
+         SN = factor(SN)) %>% 
+  ungroup()
+
+# table(mt$SN)
+table(mt$Group)/192
+# table(mt$Subject, mt$Order)
+# table(mt$Subject, mt$Correct)
+# table(mt$Subject, mt$Stimulus)
+
+# 참가자별 반응시간 분포 
+mt %>% 
+  ggplot(aes(x = Subject, y = RT/1000)) +
+  geom_boxplot() +
+  geom_hline(yintercept = 5, color = 'red') +
+  coord_flip() +
+  ggtitle('RT distribution by participant')
+
+# # 참가자별 반응시간; 5초 기준
+mt %>%
+  summarise(n = sum(RT > 5000))
+
+# 5초이상 반응 오답처리하기
+mt <- mt %>%
+  mutate(Correct = ifelse(RT > 5000, 0, Correct))
+
+```
+
+11834871(25시행), 11840325(7시행) 참가자가 느린 반응을 많이 보임.
+
+## Outlier Detection
+
+```{r, collapse=TRUE}
+# subject-specific performance
+mt.gacc <- mt %>% 
+  group_by(Subject, SN) %>% 
+  summarise(M = mean(Correct)) %>% 
+  ungroup()
+
+mt.gacc %>% print(n = Inf)
+
+gacc.sum <- mt.gacc %>% 
+  summarise(MN = mean(M)
+            , SD = sd(M)
+            , MIN = min(M)
+            , MAX = max(M)
+            , Q1 = quantile(M, prob = .25)
+            , MED = median(M)
+            , Q3 = quantile(M, prob = .75)
+            , IQR = IQR(M)
+            , Outlier = Q1 - 1.5 * IQR
+            , Extreme = Q1 - 3 * IQR) 
+
+mt.gacc %>% 
+  single_raincloud_plot(.$M, 0.3, 1, 0.1, "Accuracy") + 
+  geom_hline(yintercept=gacc.sum$Outlier, linetype="dotted") +
+  geom_hline(yintercept=gacc.sum$Extreme, linetype='dashed', color='red', linewidth=0.5)
+
+mt.gacc %>% identify_outliers(M)
+mt %>% filter(SN==07) %>% slice(1L)
+mt %>% filter(SN==29) %>% slice(1L)
+mt %>% filter(SN==35) %>% slice(1L)
+
+mt <- rm_subject(mt, c(7, 29, 35))
+
+table(mt$Group)/192 # 역균형 집단 크기 확인 
+
+```
+
+## N = 57
+
+### Descriptive Stats
+
+```{r, collapse=TRUE}
+
+mt.ind <- mt %>% 
+  group_by(SN, Stimulus, Cue, Order) %>%
+  summarise(Accuracy = mean(Correct)) %>% 
+  ungroup()
+
+mt.ind %>% 
+  group_by(Stimulus, Cue) %>% 
+  get_summary_stats(Accuracy, type = "common") %>% 
+  kable(digits = 3, format = "simple", caption = "Descriptive Stats without Order")
+
+mt.ind %>%  
+  group_by(SN, Stimulus, Cue) %>%
+  summarise(Accuracy = mean(Accuracy)) %>% 
+  unite(col = 'Condition', Stimulus:Cue) %>% 
+  pivot_wider(id_cols = c(SN),
+              names_from = Condition, values_from = Accuracy) %>% 
+  mutate(Intact = Intact_RetroCue - Intact_NoCue, # 화살표 단서 활용 효과
+         Scrambled = Scrambled_RetroCue - Scrambled_NoCue) %>% 
+  select(SN, Intact, Scrambled) %>% 
+  pivot_longer(cols = c(Intact, Scrambled), 
+               names_to = 'Stimulus',
+               values_to = 'CueBenefit') %>% 
+  group_by(Stimulus) %>% 
+  get_summary_stats(CueBenefit, type = "common") %>% 
+  kable(digits = 3, format = "simple", caption = "CueBenefit")
+
+mt.ind %>% 
+  group_by(Stimulus, Cue, Order) %>% 
+  get_summary_stats(Accuracy, type = "common") %>% 
+  kable(digits = 3, format = "simple", caption = "Descriptive Stats with Order")
+
+```
+
+40명 모집했을 때에 비해 **CueBenefit**(`RetroCue` - `NoCue`)이 증가하였다. `Intact`: 0.007 → 0.034 `Scrambled`: 0.047 → 0.065
+
+### Graph
+
+```{r, collapse=TRUE}
+mt.ind %>% ggplot(aes(x = Order, Stimulus, y = Accuracy, fill = Cue)) +
+  stat_summary(fun = mean, 
+               geom = "bar",
+               position = position_dodge(width = 0.8), 
+               aes(fill = Cue), 
+               width = 0.8) +
+  stat_summary(fun.data = "mean_cl_boot", 
+               position = position_dodge(width = 0.8), 
+               color = "darkred",
+               size = 0.3, show.legend = FALSE) +
+  facet_wrap(~Stimulus) +
+  coord_cartesian(ylim = c(0.3, 1), clip = "on") +
+  scale_y_continuous(breaks=seq(0.3, 1, by = 0.1)) +
+  scale_fill_brewer(labels = c("NoCue" = "No-cue", "RetroCue" = "Retro-cue"),
+                    palette = "Set2") + 
+  labs(x = "Order", y = "Accuracy") +
+  ggtitle('Accuracy ~ Stimulus + Cue + Order') + 
+  theme_bw(base_size = 16) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+```
+
+### Anova
+
+```{r, collapse=TRUE}
+anova_test(
+  data = mt.ind, dv = Accuracy, wid = SN,
+  within = c(Stimulus, Cue, Order),
+  effect.size = "pes"
+) %>% get_anova_table() %>% 
+  kable(digits = 3, format = "simple", caption = "ANOVA")
+
+```
+
+## N = 40 (Compliant Subjects)
+
+Post-query에서 지시를 따라 과제를 수행했다고 응답한 피험자들만 포함.
+
+```{r, collapse=TRUE}
+mt2 <- full_join( mt %>% group_by(Subject) %>% nest(), 
+                  qs %>% select(Subject, Strategy), 
+                  by = join_by(Subject)) %>% 
+  unnest(data) %>% 
+  ungroup()
+slice_sample(mt2, n = 10)
+
+mt2 %>% 
+  filter(Strategy == 1) %>% 
+  summarise(SN = n_distinct(Subject)) # 40명
+
+mt.ind2 <- mt2 %>% 
+  filter(Strategy == 1) %>% 
+  group_by(SN, Stimulus, Cue, Order) %>%
+  summarise(Accuracy = mean(Correct)) %>% 
+  ungroup()
+
+mt.ind22 <- mt2 %>% 
+  filter(Strategy == 1) %>% 
+  group_by(SN, Stimulus, Cue) %>%
+  summarise(Accuracy = mean(Correct)) %>% 
+  ungroup() # 그래프를 위한 것
+
+```
+
+### Descriptive Stats
+
+```{r, collapse=TRUE}
+mt.ind2 %>% 
+  group_by(Stimulus, Cue) %>% 
+  get_summary_stats(Accuracy, type = "common") %>% 
+  kable(digits = 3, format = "simple", caption = "Descriptive Stats without Order(N=40)")
+
+mt.ind2 %>% 
+  group_by(SN, Stimulus, Cue) %>%
+  summarise(Accuracy = mean(Accuracy)) %>% 
+  unite(col = 'Condition', Stimulus:Cue) %>% 
+  pivot_wider(id_cols = c(SN),
+              names_from = Condition, values_from = Accuracy) %>% 
+  mutate(Intact = Intact_RetroCue - Intact_NoCue, # 화살표 단서 활용 효과
+         Scrambled = Scrambled_RetroCue - Scrambled_NoCue) %>% 
+  select(SN, Intact, Scrambled) %>% 
+  pivot_longer(cols = c(Intact, Scrambled), 
+               names_to = 'Stimulus',
+               values_to = 'CueBenefit') %>% 
+  group_by(Stimulus) %>% 
+  get_summary_stats(CueBenefit, type = "common") %>% 
+  kable(digits = 3, format = "simple", caption = "CueBenefit(N=40)")
+
+mt.ind2 %>% 
+  group_by(Stimulus, Cue, Order) %>% 
+  get_summary_stats(Accuracy, type = "common") %>% 
+  kable(digits = 3, format = "simple", caption = "Descriptive Stats with Order(N=40)")
+
+```
+
+단서를 활용했다고 응답한 참가자의 **CueBenefit**(`RetroCue` - `NoCue`)는 다음같이 증가했다. `Intact`: 0.007 → 0.029 `Scrambled`: 0.047 → 0.077
+
+### Graph
+
+```{r, collapse=TRUE}
+mt.ind2 %>% ggplot(aes(x = Order, Stimulus, y = Accuracy * 100, fill = Cue)) +
+  stat_summary(fun = mean, 
+               geom = "bar",
+               position = position_dodge(width = 0.8), 
+               aes(fill = Cue), 
+               width = 0.8) +
+  stat_summary(fun.data = "mean_cl_boot", 
+               position = position_dodge(width = 0.8), 
+               color = "darkred",
+               size = 0.3, show.legend = FALSE) +
+  facet_wrap(~Stimulus) +
+  scale_fill_brewer(labels = c("NoCue" = "No-cue", "RetroCue" = "Retro-cue"),
+                    palette = "Set2") + 
+  labs(x = "Order", y = "Accuracy (% Correct)") +
+  coord_cartesian(ylim = c(30, 100), clip = "on") +
+  scale_y_continuous(breaks=seq(30, 100, by = 10)) +
+  ggtitle('Accuracy ~ Stimulus + Cue + Order') + 
+  theme_bw(base_size = 16) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+# Accuracy ~ Stimulus + Cue; bar plot
+mt.ind22 %>% ggplot(aes(x = Stimulus, y = Accuracy*100, fill = Cue)) +
+  stat_summary(fun = mean, 
+               geom = "bar",
+               position = position_dodge(width = 0.8), 
+               aes(fill = Cue), 
+               width = 0.8) +
+  stat_summary(fun.data = "mean_cl_boot", 
+               position = position_dodge(width = 0.8), 
+               color = "darkred",
+               size = 0.3, show.legend = FALSE) +
+  scale_fill_brewer(labels = c("NoCue" = "No-cue", "RetroCue" = "Retro-cue"),
+                    palette = "Set2") + 
+  labs(x = "Stimulus", y = "Accuracy (% Correct)") +
+  coord_cartesian(ylim = c(30, 100), clip = "on") +
+  scale_y_continuous(breaks=seq(30, 100, by = 10)) +
+  ggtitle('Accuracy ~ Stimulus + Cue') +
+  theme_bw(base_size = 16) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+# Accuracy ~ Stimulus + Cue + Order with participants data
+mt.ind2 %>% 
+  ggplot(aes(x = Order, y = Accuracy*100, fill = Cue)) +
+  stat_summary(fun = mean, 
+               geom = "bar",
+               position = position_dodge(width = 0.8), 
+               aes(fill = Cue), 
+               width = 0.8, alpha = 0.7) +
+  geom_point(aes(color = Cue), 
+             position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8), 
+             size = 2, alpha = 0.7, 
+             show.legend = FALSE) +
+  stat_summary(fun.data = "mean_cl_boot", 
+               position = position_dodge(width = 0.8), 
+               color = "darkred",
+               size = 0.3, show.legend = FALSE) +
+  scale_fill_brewer(labels = c("NoCue" = "No-cue", "RetroCue" = "Retro-cue"),
+                    palette = "Set2") + 
+  scale_color_brewer(palette = "Set2") +
+  labs(x = "Order", y = "Accuracy (% Correct)") +
+  coord_cartesian(ylim = c(30, 100), clip = "on") +
+  scale_y_continuous(breaks=seq(30, 100, by = 10)) +
+  facet_wrap(~Stimulus) +
+  theme_bw(base_size = 16) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+# Accuracy ~ Stimulus + Cue with participants data
+mt.ind22 %>% 
+  ggplot(aes(x = Stimulus, y = Accuracy*100, fill = Cue)) +
+  stat_summary(fun = mean, 
+               geom = "bar",
+               position = position_dodge(width = 0.8), 
+               aes(fill = Cue), 
+               width = 0.8, alpha = 0.7) +
+  geom_point(aes(color = Cue), 
+             position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8), 
+             size = 2.5, alpha = 0.7, 
+             show.legend = FALSE) +
+  stat_summary(fun.data = "mean_cl_boot",
+               position = position_dodge(width = 0.8),
+               color = "darkred",
+               size = 0.3, show.legend = FALSE) +
+  scale_fill_brewer(labels = c("NoCue" = "No-cue", "RetroCue" = "Retro-cue"),
+                    palette = "Set2") + 
+  scale_color_brewer(palette = "Set2") +
+  labs(x = "Stimulus", y = "Accuracy (% Correct)") +
+  coord_cartesian(ylim = c(30, 100), clip = "on") +
+  scale_y_continuous(breaks=seq(30, 100, by = 10)) +
+  theme_bw(base_size = 16) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+# box plot
+mt.ind2 %>% 
+  ggplot(aes(x = Order, y = Accuracy, color = Cue)) +
+  geom_boxplot(position = position_dodge(width = 0.8), 
+               width = 0.8) +  
+  geom_point(aes(color = Cue),  
+             position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8), 
+             alpha = 0.7, size = 2) + 
+  scale_color_brewer(palette = "Set2", 
+                     labels = c("NoCue" = "No-cue", "RetroCue" = "Retro-cue")) +
+  labs(x = "Order", y = "Accuracy") +
+  coord_cartesian(ylim = c(0.3, 1), clip = "on") +
+  scale_y_continuous(breaks=seq(0.3, 1, by = 0.1)) +
+  facet_wrap(~Stimulus) +
+  theme_bw(base_size = 16) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+
+
+```
+
+### Anova
+
+```{r, collapse=TRUE}
+anova_test(
+  data = mt.ind2, dv = Accuracy, wid = SN,
+  within = c(Stimulus, Cue, Order),
+  effect.size = "pes")  %>% 
+  get_anova_table() %>% 
+  kable(digits = 3, format = "simple", caption = "ANOVA")
+
+model <- aov(Accuracy ~ Stimulus * Cue * Order + Error(SN/(Stimulus * Cue * Order)), data = mt.ind2)
+
+emmeans(model, ~ Stimulus*Cue) %>% 
+  pairs(adjust = "bonferroni") %>% 
+  as.data.frame() %>% 
+  kable(digits = 3, format = "simple", caption = "Post-hoc Analysis for Stimulus * Cue Interaction")
+
+
+```
+
+### BayesFactor
+
+```{r}
+bf <- anovaBF(Accuracy ~ Stimulus*Cue + SN, data = as.data.frame(mt.ind2), 
+              whichRandom = "SN", progress = FALSE)
+# anovaBF 실행 시 matrix~ 오류 생기면, 아래 코드를 돌린다.
+# https://stackoverflow.com/questions/77530214/error-dsparsemodelmatrix-object-superclass-xmatrix-not-defined/77530730#77530730
+# install.packages("MatrixModels", type = "source")
+
+bf
+plot(bf)
+ 
+bf[3]/bf[4]
+
+```
+
+------------------------------------------------------------------------
+
+# Exploratory
+
+## N = 17
+
+Post-query에서 지시를 따라 과제를 수행했다고 **응답하지 않은** 피험자들만 포함.
+
+```{r, collapse=TRUE}
+mt2 %>% 
+  filter(Strategy != 1) %>% 
+  summarise(SN = n_distinct(Subject)) # 17명
+
+mt.ind3 <- mt2 %>% 
+  filter(Strategy != 1) %>% 
+  group_by(SN, Stimulus, Cue, Order) %>%
+  summarise(Accuracy = mean(Correct)) %>% 
+  ungroup()
+
+mt.ind33 <- mt2 %>% 
+  filter(Strategy != 1) %>% 
+  group_by(SN, Stimulus, Cue) %>%
+  summarise(Accuracy = mean(Correct)) %>% 
+  ungroup() # 그래프를 위한 것
+
+```
+
+### Descriptive Stats
+
+```{r, collapse=TRUE}
+mt.ind3 %>% 
+  group_by(Stimulus, Cue) %>% 
+  get_summary_stats(Accuracy, type = "common") %>% 
+  kable(digits = 3, format = "simple", caption = "Descriptive Stats without Order(N=17)")
+
+mt.ind3 %>% 
+  group_by(SN, Stimulus, Cue) %>%
+  summarise(Accuracy = mean(Accuracy)) %>% 
+  unite(col = 'Condition', Stimulus:Cue) %>% 
+  pivot_wider(id_cols = c(SN),
+              names_from = Condition, values_from = Accuracy) %>% 
+  mutate(Intact = Intact_RetroCue - Intact_NoCue, # 화살표 단서 활용 효과
+         Scrambled = Scrambled_RetroCue - Scrambled_NoCue) %>% 
+  select(SN, Intact, Scrambled) %>% 
+  pivot_longer(cols = c(Intact, Scrambled), 
+               names_to = 'Stimulus',
+               values_to = 'CueBenefit') %>% 
+  group_by(Stimulus) %>% 
+  get_summary_stats(CueBenefit, type = "common") %>% 
+  kable(digits = 3, format = "simple", caption = "CueBenefit(N=17)")
+
+mt.ind3 %>% 
+  group_by(Stimulus, Cue, Order) %>% 
+  get_summary_stats(Accuracy, type = "common") %>% 
+  kable(digits = 3, format = "simple", caption = "Descriptive Stats with Order")
+
+```
+
+### Graph
+
+```{r, collapse=TRUE}
+mt.ind3 %>% ggplot(aes(x = Order, Stimulus, y = Accuracy * 100, fill = Cue)) +
+  stat_summary(fun = mean, 
+               geom = "bar",
+               position = position_dodge(width = 0.8), 
+               aes(fill = Cue), 
+               width = 0.8) +
+  stat_summary(fun.data = "mean_cl_boot", 
+               position = position_dodge(width = 0.8), 
+               color = "darkred",
+               size = 0.3, show.legend = FALSE) +
+  facet_wrap(~Stimulus) +
+  scale_fill_brewer(labels = c("NoCue" = "No-cue", "RetroCue" = "Retro-cue"),
+                    palette = "Set2") + 
+  labs(x = "Order", y = "Accuracy (% Correct)") +
+  coord_cartesian(ylim = c(30, 100), clip = "on") +
+  scale_y_continuous(breaks=seq(30, 100, by = 10)) +
+  ggtitle('Accuracy ~ Stimulus + Cue + Order') + 
+  theme_bw(base_size = 16) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+# Accuracy ~ Stimulus + Cue; bar plot
+mt.ind33 %>% ggplot(aes(x = Stimulus, y = Accuracy*100, fill = Cue)) +
+  stat_summary(fun = mean, 
+               geom = "bar",
+               position = position_dodge(width = 0.8), 
+               aes(fill = Cue), 
+               width = 0.8) +
+  stat_summary(fun.data = "mean_cl_boot", 
+               position = position_dodge(width = 0.8), 
+               color = "darkred",
+               size = 0.3, show.legend = FALSE) +
+  scale_fill_brewer(labels = c("NoCue" = "No-cue", "RetroCue" = "Retro-cue"),
+                    palette = "Set2") + 
+  labs(x = "Stimulus", y = "Accuracy (% Correct)") +
+  coord_cartesian(ylim = c(30, 100), clip = "on") +
+  scale_y_continuous(breaks=seq(30, 100, by = 10)) +
+  ggtitle('Accuracy ~ Stimulus + Cue') +
+  theme_bw(base_size = 16) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+# Accuracy ~ Stimulus + Cue + Order with participants data
+mt.ind3 %>% 
+  ggplot(aes(x = Order, y = Accuracy*100, fill = Cue)) +
+  stat_summary(fun = mean, 
+               geom = "bar",
+               position = position_dodge(width = 0.8), 
+               aes(fill = Cue), 
+               width = 0.8, alpha = 0.7) +
+  geom_point(aes(color = Cue), 
+             position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8), 
+             size = 2, alpha = 0.7, 
+             show.legend = FALSE) +
+  stat_summary(fun.data = "mean_cl_boot", 
+               position = position_dodge(width = 0.8), 
+               color = "darkred",
+               size = 0.3, show.legend = FALSE) +
+  scale_fill_brewer(labels = c("NoCue" = "No-cue", "RetroCue" = "Retro-cue"),
+                    palette = "Set2") + 
+  scale_color_brewer(palette = "Set2") +
+  labs(x = "Order", y = "Accuracy (% Correct)") +
+  coord_cartesian(ylim = c(30, 100), clip = "on") +
+  scale_y_continuous(breaks=seq(30, 100, by = 10)) +
+  facet_wrap(~Stimulus) +
+  theme_bw(base_size = 16) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+# Accuracy ~ Stimulus + Cue with participants data
+mt.ind33 %>% 
+  ggplot(aes(x = Stimulus, y = Accuracy*100, fill = Cue)) +
+  stat_summary(fun = mean, 
+               geom = "bar",
+               position = position_dodge(width = 0.8), 
+               aes(fill = Cue), 
+               width = 0.8, alpha = 0.7) +
+  geom_point(aes(color = Cue), 
+             position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8), 
+             size = 2.5, alpha = 0.7, 
+             show.legend = FALSE) +
+  stat_summary(fun.data = "mean_cl_boot",
+               position = position_dodge(width = 0.8),
+               color = "darkred",
+               size = 0.3, show.legend = FALSE) +
+  scale_fill_brewer(labels = c("NoCue" = "No-cue", "RetroCue" = "Retro-cue"),
+                    palette = "Set2") + 
+  scale_color_brewer(palette = "Set2") +
+  labs(x = "Stimulus", y = "Accuracy (% Correct)") +
+  coord_cartesian(ylim = c(30, 100), clip = "on") +
+  scale_y_continuous(breaks=seq(30, 100, by = 10)) +
+  theme_bw(base_size = 16) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+```
+
+
+### Anova
+
+```{r, collapse=TRUE}
+anova_test(
+  data = mt.ind3, dv = Accuracy, wid = SN,
+  within = c(Stimulus, Cue, Order),
+  effect.size = "pes")  %>% 
+  get_anova_table() %>% 
+  kable(digits = 3, format = "simple", caption = "ANOVA")
+
+
+```
+
+## N = 40 vs. N = 17
+
+```{r, collapse=TRUE}
+mt3 <- mt2 %>% 
+  mutate(usingCue = ifelse(Strategy == 1, 1, 0)) %>% 
+  group_by(SN, Stimulus, Cue, usingCue) %>%
+  summarise(Accuracy = mean(Correct)) %>% 
+  ungroup()
+
+anova_test(
+  data = mt3, dv = Accuracy, wid = SN,
+  between = usingCue,
+  within = c(Stimulus, Cue),
+  effect.size = "pes")  %>% 
+  get_anova_table() %>% 
+  kable(digits = 3, format = "simple", caption = "ANOVA")
+
+
+```
+
+## Target과 Response의 거리에 따라
+
+```{r, collapse=TRUE}
+mt4 <- mt2 %>%
+  mutate(TRdiff = abs(Key - as.numeric(Response)))  
+
+# RT
+mt4 %>% 
+  ggplot(aes(x = TRdiff, y = RT, color = Cue)) +
+  stat_summary(fun = mean, geom = "line") +
+  scale_color_brewer(palette = "Set2") +
+  scale_x_continuous(breaks = c(0, 1, 2)) +
+  facet_wrap(~Stimulus)
+
+# Correct
+mt.ind4 <- mt4 %>%  
+  group_by(SN, Stimulus, Cue, Order, TRdiff) %>% 
+  mutate(c.TRdiff = n())
+  
+mt.ind4 %>%  
+  ggplot(aes(x = TRdiff, y = c.TRdiff, color = Cue, shape = Order)) +
+  stat_summary(fun = mean, geom = "point", 
+               position = position_jitterdodge(jitter.width = 0, dodge.width = 0.5), size = 4) +  
+  scale_color_brewer(palette = "Set2") +
+  scale_x_continuous(breaks = c(0, 1, 2)) +
+  facet_wrap(~Stimulus) +
+  labs(y = "Count")
+
+```
+
+## 수행률에 따라
+
+정확도를 median기준으로 나눠 보아도 패턴은 똑같이 나온다.
+
+```{r, collapse=TRUE}
+mt.gacc <- mt.gacc %>% 
+  mutate(Perf = ifelse(M >= median(M), 'high', 'low'))
+
+mt5 <- full_join( mt2 %>% group_by(Subject) %>% nest(), 
+                  mt.gacc %>% select(Subject, Perf), 
+                  by = join_by(Subject)) %>% 
+  unnest(data) %>% 
+  ungroup()
+
+mt.ind5 <- mt5 %>% 
+  group_by(SN, Stimulus, Cue, Perf) %>%
+  summarise(Accuracy = mean(Correct)) %>% 
+  ungroup() 
+
+mt.ind5 %>% ggplot(aes(x = Stimulus, Perf, y = Accuracy, fill = Cue)) +
+  stat_summary(fun = mean, 
+               geom = "bar",
+               position = position_dodge(width = 0.8), 
+               width = 0.8) +
+  facet_wrap(~Perf) +
+  coord_cartesian(ylim = c(0.3, 1), clip = "on") +
+  scale_y_continuous(breaks=seq(0.3, 1, by = 0.1)) +
+  scale_fill_brewer(labels = c("NoCue" = "No-cue", "RetroCue" = "Retro-cue"),
+                    palette = "Set2") + 
+  labs(x = "Stimulus", y = "Accuracy") +
+  ggtitle('Accuracy ~ Stimulus + Cue + performance group') + 
+  theme_bw(base_size = 16) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+```
+
+## 반응시간 제한
+
+5초 반응시간 제한을 두어도 개인차가 줄지 않는다.
+
+```{r, collapse=TRUE}
+mt6 <- mt2 %>%
+  mutate(Correct = ifelse(RT > 10000, 0, Correct))
+
+mt.ind6 <- mt6 %>% 
+  group_by(SN, Stimulus, Cue, Order) %>%
+  summarise(Accuracy = mean(Correct)) %>% 
+  ungroup() 
+
+mt.ind6 %>% 
+  ggplot(aes(x = Stimulus, y = Accuracy, fill = Cue)) +
+  stat_summary(fun = mean, 
+               geom = "bar",
+               position = position_dodge(width = 0.8), 
+               aes(fill = Cue), 
+               width = 0.8, alpha = 0.7) +
+  geom_point(aes(color = Cue), 
+             position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8), 
+             size = 2.5, alpha = 0.7, 
+             show.legend = FALSE) +
+  stat_summary(fun.data = "mean_cl_boot",
+               position = position_dodge(width = 0.8),
+               color = "darkred",
+               size = 0.3, show.legend = FALSE) +
+  scale_fill_brewer(labels = c("NoCue" = "No-cue", "RetroCue" = "Retro-cue"),
+                    palette = "Set2") + 
+  scale_color_brewer(palette = "Set2") +
+  labs(x = "Stimulus", y = "Accuracy") +
+  coord_cartesian(ylim = c(0.3, 1), clip = "on") +
+  scale_y_continuous(breaks=seq(0.3, 1, by = 0.1)) +
+  theme_bw(base_size = 16) +
+  theme(legend.position = "top",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+```
+
+
+## N-1 시행 고려
+
+```{r, collapse=TRUE}
+mt7 <- mt2 %>% 
+  group_by(SN) %>%                            
+  arrange(Trials, .by_group = TRUE) %>%            
+  mutate(N1 = lag(Stimulus) == "Intact",        
+         N1 = if_else(is.na(N1), 0, as.numeric(N1))) %>%
+  ungroup() 
+
+mt.ind7 <- mt7 %>% 
+  filter(Strategy == 1) %>% 
+  group_by(SN, Stimulus, Cue, N1) %>%
+  summarise(Accuracy = mean(Correct)) %>% 
+  ungroup()
+
+mt.ind7 %>% 
+  ggplot(aes(x = Stimulus, y = Accuracy*100, fill = Cue)) +
+  stat_summary(fun = mean, 
+               geom = "bar",
+               position = position_dodge(width = 0.8), 
+               aes(fill = Cue), 
+               width = 0.8, alpha = 0.7) +
+  geom_point(aes(color = Cue), 
+             position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8), 
+             size = 2.5, alpha = 0.7, 
+             show.legend = FALSE) +
+  stat_summary(fun.data = "mean_cl_boot",
+               position = position_dodge(width = 0.8),
+               color = "darkred",
+               size = 0.3, show.legend = FALSE) +
+  scale_fill_brewer(labels = c("NoCue" = "No-cue", "RetroCue" = "Retro-cue"),
+                    palette = "Set2") + 
+  scale_color_brewer(palette = "Set2") +
+  labs(x = "Stimulus", y = "Accuracy (% Correct)") +
+  coord_cartesian(ylim = c(30, 100), clip = "on") +
+  scale_y_continuous(breaks=seq(30, 100, by = 10)) +
+  facet_wrap(~N1) +
+  theme_bw(base_size = 16) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+```
